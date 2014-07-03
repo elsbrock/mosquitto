@@ -141,8 +141,11 @@ int _add_acl(struct mosquitto_db *db, const char *user, const char *topic, int a
 		acl_user->acl = NULL;
 	}
 
-	acl= _mosquitto_malloc(sizeof(struct _mosquitto_acl));
-	if(!acl) return MOSQ_ERR_NOMEM;
+	acl = _mosquitto_malloc(sizeof(struct _mosquitto_acl));
+	if(!acl){
+		_mosquitto_free(local_topic);
+		return MOSQ_ERR_NOMEM;
+	}
 	acl->access = access;
 	acl->topic = local_topic;
 	acl->next = NULL;
@@ -178,6 +181,7 @@ int _add_acl_pattern(struct mosquitto_db *db, const char *topic, int access)
 {
 	struct _mosquitto_acl *acl, *acl_tail;
 	char *local_topic;
+	char *s;
 
 	if(!db || !topic) return MOSQ_ERR_INVAL;
 
@@ -187,10 +191,33 @@ int _add_acl_pattern(struct mosquitto_db *db, const char *topic, int access)
 	}
 
 	acl = _mosquitto_malloc(sizeof(struct _mosquitto_acl));
-	if(!acl) return MOSQ_ERR_NOMEM;
+	if(!acl){
+		_mosquitto_free(local_topic);
+		return MOSQ_ERR_NOMEM;
+	}
 	acl->access = access;
 	acl->topic = local_topic;
 	acl->next = NULL;
+
+	acl->ccount = 0;
+	s = local_topic;
+	while(s){
+		s = strstr(s, "%c");
+		if(s){
+			acl->ccount++;
+			s+=2;
+		}
+	}
+
+	acl->ucount = 0;
+	s = local_topic;
+	while(s){
+		s = strstr(s, "%u");
+		if(s){
+			acl->ucount++;
+			s+=2;
+		}
+	}
 
 	if(db->acl_patterns){
 		acl_tail = db->acl_patterns;
@@ -212,7 +239,6 @@ int mosquitto_acl_check_default(struct mosquitto_db *db, struct mosquitto *conte
 	bool result;
 	int i;
 	int len, tlen, clen, ulen;
-	int ccount, ucount;
 	char *s;
 
 	if(!db || !context || !topic) return MOSQ_ERR_INVAL;
@@ -251,32 +277,18 @@ int mosquitto_acl_check_default(struct mosquitto_db *db, struct mosquitto *conte
 	while(acl_root){
 		tlen = strlen(acl_root->topic);
 
-		ccount = 0;
-		s = acl_root->topic;
-		while(s){
-			s = strstr(s, "%c");
-			if(s){
-				ccount++;
-				s+=2;
-			}
-		}
-
-		ucount = 0;
-		s = acl_root->topic;
-		while(s){
-			s = strstr(s, "%u");
-			if(s){
-				ucount++;
-				s+=2;
-			}
-		}
-
-		if(ucount && !context->username){
+		if(acl_root->ucount && !context->username){
+			acl_root = acl_root->next;
 			continue;
 		}
 
-		ulen = strlen(context->username);
-		len = tlen + ccount*(clen-2) + ucount*(ulen-2);
+		if(context->username){
+			ulen = strlen(context->username);
+			len = tlen + acl_root->ccount*(clen-2) + acl_root->ucount*(ulen-2);
+		}else{
+			ulen = 0;
+			len = tlen + acl_root->ccount*(clen-2);
+		}
 		local_acl = malloc(len+1);
 		if(!local_acl) return 1; // FIXME
 		s = local_acl;
@@ -287,7 +299,7 @@ int mosquitto_acl_check_default(struct mosquitto_db *db, struct mosquitto *conte
 					strncpy(s, context->id, clen);
 					s+=clen;
 					continue;
-				}else if(acl_root->topic[i+1] == 'u'){
+				}else if(context->username && acl_root->topic[i+1] == 'u'){
 					i++;
 					strncpy(s, context->username, ulen);
 					s+=ulen;
@@ -300,6 +312,7 @@ int mosquitto_acl_check_default(struct mosquitto_db *db, struct mosquitto *conte
 		local_acl[len] = '\0';
 
 		mosquitto_topic_matches_sub(local_acl, topic, &result);
+		_mosquitto_free(local_acl);
 		if(result){
 			if(access & acl_root->access){
 				/* And access is allowed. */
@@ -307,7 +320,6 @@ int mosquitto_acl_check_default(struct mosquitto_db *db, struct mosquitto *conte
 			}
 		}
 
-		_mosquitto_free(local_acl);
 
 		acl_root = acl_root->next;
 	}
@@ -436,7 +448,7 @@ static void _free_acl(struct _mosquitto_acl *acl)
 
 static int _acl_cleanup(struct mosquitto_db *db, bool reload)
 {
-	int i;
+	struct mosquitto *context, *ctxt_tmp;
 	struct _mosquitto_acl_user *user_tail;
 
 	if(!db) return MOSQ_ERR_INVAL;
@@ -448,12 +460,8 @@ static int _acl_cleanup(struct mosquitto_db *db, bool reload)
 	 * is called if we are reloading the config. If this is not done, all 
 	 * access will be denied to currently connected clients.
 	 */
-	if(db->contexts){
-		for(i=0; i<db->context_count; i++){
-			if(db->contexts[i] && db->contexts[i]->acl_list){
-				db->contexts[i]->acl_list = NULL;
-			}
-		}
+	HASH_ITER(hh_id, db->contexts_by_id, context, ctxt_tmp){
+		context->acl_list = NULL;
 	}
 
 	while(db->acl_list){
@@ -632,8 +640,9 @@ int mosquitto_unpwd_check_default(struct mosquitto_db *db, const char *username,
 	int rc;
 #endif
 
-	if(!db || !username) return MOSQ_ERR_INVAL;
+	if(!db) return MOSQ_ERR_INVAL;
 	if(!db->unpwd) return MOSQ_ERR_SUCCESS;
+	if(!username) return MOSQ_ERR_INVAL;
 
 	HASH_ITER(hh, db->unpwd, u, tmp){
 		if(!strcmp(u->username, username)){
@@ -696,49 +705,45 @@ static int _unpwd_cleanup(struct _mosquitto_unpwd **root, bool reload)
  */
 int mosquitto_security_apply_default(struct mosquitto_db *db)
 {
+	struct mosquitto *context, *ctxt_tmp;
 	struct _mosquitto_acl_user *acl_user_tail;
 	bool allow_anonymous;
-	int i;
 
 	if(!db) return MOSQ_ERR_INVAL;
 
 	allow_anonymous = db->config->allow_anonymous;
 	
-	if(db->contexts){
-		for(i=0; i<db->context_count; i++){
-			if(db->contexts[i]){
-				/* Check for anonymous clients when allow_anonymous is false */
-				if(!allow_anonymous && !db->contexts[i]->username){
-					db->contexts[i]->state = mosq_cs_disconnecting;
-					_mosquitto_socket_close(db->contexts[i]);
-					continue;
-				}
-				/* Check for connected clients that are no longer authorised */
-				if(mosquitto_unpwd_check_default(db, db->contexts[i]->username, db->contexts[i]->password) != MOSQ_ERR_SUCCESS){
-					db->contexts[i]->state = mosq_cs_disconnecting;
-					_mosquitto_socket_close(db->contexts[i]);
-					continue;
-				}
-				/* Check for ACLs and apply to user. */
-				if(db->acl_list){
-  					acl_user_tail = db->acl_list;
-					while(acl_user_tail){
-						if(acl_user_tail->username){
-							if(db->contexts[i]->username){
-								if(!strcmp(acl_user_tail->username, db->contexts[i]->username)){
-									db->contexts[i]->acl_list = acl_user_tail;
-									break;
-								}
-							}
-						}else{
-							if(!db->contexts[i]->username){
-								db->contexts[i]->acl_list = acl_user_tail;
-								break;
-							}
+	HASH_ITER(hh_id, db->contexts_by_id, context, ctxt_tmp){
+		/* Check for anonymous clients when allow_anonymous is false */
+		if(!allow_anonymous && !context->username){
+			context->state = mosq_cs_disconnecting;
+			_mosquitto_socket_close(db, context);
+			continue;
+		}
+		/* Check for connected clients that are no longer authorised */
+		if(mosquitto_unpwd_check_default(db, context->username, context->password) != MOSQ_ERR_SUCCESS){
+			context->state = mosq_cs_disconnecting;
+			_mosquitto_socket_close(db, context);
+			continue;
+		}
+		/* Check for ACLs and apply to user. */
+		if(db->acl_list){
+  			acl_user_tail = db->acl_list;
+			while(acl_user_tail){
+				if(acl_user_tail->username){
+					if(context->username){
+						if(!strcmp(acl_user_tail->username, context->username)){
+							context->acl_list = acl_user_tail;
+							break;
 						}
-						acl_user_tail = acl_user_tail->next;
+					}
+				}else{
+					if(!context->username){
+						context->acl_list = acl_user_tail;
+						break;
 					}
 				}
+				acl_user_tail = acl_user_tail->next;
 			}
 		}
 	}
@@ -796,12 +801,12 @@ int _base64_decode(char *in, unsigned char **decoded, unsigned int *decoded_len)
 	BIO_write(bmem, in, strlen(in));
 
 	if(BIO_flush(bmem) != 1){
-		BIO_free_all(bmem);
+		BIO_free_all(b64);
 		return 1;
 	}
 	*decoded = calloc(strlen(in), 1);
 	*decoded_len =  BIO_read(b64, *decoded, strlen(in));
-	BIO_free_all(bmem);
+	BIO_free_all(b64);
 
 	return 0;
 }

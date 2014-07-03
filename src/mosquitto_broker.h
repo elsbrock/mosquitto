@@ -1,5 +1,5 @@
 /*
-Copyright (c) 2009-2013 Roger Light <roger@atchoo.org>
+Copyright (c) 2009-2014 Roger Light <roger@atchoo.org>
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -52,6 +52,14 @@ POSSIBILITY OF SUCH DAMAGE.
 #define MQTT3_LOG_TOPIC 0x10
 #define MQTT3_LOG_ALL 0xFF
 
+#define WEBSOCKET_CLIENT -2
+
+enum mosquitto_protocol {
+	mp_mqtt,
+	mp_mqttsn,
+	mp_websockets
+};
+
 typedef uint64_t dbid_t;
 
 struct _mqtt3_listener {
@@ -63,6 +71,8 @@ struct _mqtt3_listener {
 	int *socks;
 	int sock_count;
 	int client_count;
+	enum mosquitto_protocol protocol;
+	bool use_username_as_clientid;
 #ifdef WITH_TLS
 	char *cafile;
 	char *capath;
@@ -75,6 +85,9 @@ struct _mqtt3_listener {
 	char *crlfile;
 	bool use_identity_as_username;
 	char *tls_version;
+#endif
+#ifdef WITH_WEBSOCKETS
+	struct libwebsocket_context *ws_context;
 #endif
 };
 
@@ -177,6 +190,8 @@ struct _mosquitto_acl{
 	struct _mosquitto_acl *next;
 	char *topic;
 	int access;
+	int ucount;
+	int ccount;
 };
 
 struct _mosquitto_acl_user{
@@ -198,14 +213,6 @@ struct _mosquitto_auth_plugin{
 	int (*psk_key_get)(void *user_data, const char *hint, const char *identity, char *key, int max_key_len);
 };
 
-struct _clientid_index_hash{
-	/* this is the key */
-	char *id;
-	/* this is the index where the client ID exists in the db->contexts array */
-	int db_context_index;
-	UT_hash_handle hh;
-};
-
 struct mosquitto_db{
 	dbid_t last_db_id;
 	struct _mosquitto_subhier subs;
@@ -213,9 +220,11 @@ struct mosquitto_db{
 	struct _mosquitto_acl_user *acl_list;
 	struct _mosquitto_acl *acl_patterns;
 	struct _mosquitto_unpwd *psk_id;
-	struct mosquitto **contexts;
+	struct mosquitto *contexts_by_id;
+	struct mosquitto *contexts_by_sock;
+	struct mosquitto *contexts_for_free;
+	struct mosquitto *contexts_bridge;
 	struct _clientid_index_hash *clientid_index_hash;
-	int context_count;
 	struct mosquitto_msg_store *msg_store;
 	int msg_store_count;
 	struct mqtt3_config *config;
@@ -223,6 +232,10 @@ struct mosquitto_db{
 	struct _mosquitto_auth_plugin auth_plugin;
 	int subscription_count;
 	int retained_count;
+#ifdef WITH_SYS_TREE
+	int connected_count;
+	int disconnected_count;
+#endif
 };
 
 enum mqtt3_bridge_direction{
@@ -269,6 +282,9 @@ struct _mqtt3_bridge{
 	time_t restart_t;
 	char *username;
 	char *password;
+	char *local_clientid;
+	char *local_username;
+	char *local_password;
 	bool notifications;
 	char *notification_topic;
 	enum mosquitto_bridge_start_type start_type;
@@ -291,6 +307,18 @@ struct _mqtt3_bridge{
 #  endif
 #endif
 };
+
+#ifdef WITH_WEBSOCKETS
+struct libws_mqtt_hack {
+	struct mosquitto *old_mosq;
+	struct mosquitto *new_mosq;
+	struct libws_mqtt_hack *next;
+};
+
+struct libws_mqtt_data {
+	struct mosquitto *mosq;
+};
+#endif
 
 #include <net_mosq.h>
 
@@ -318,7 +346,7 @@ void mqtt3_config_cleanup(struct mqtt3_config *config);
 /* ============================================================
  * Server send functions
  * ============================================================ */
-int _mosquitto_send_connack(struct mosquitto *context, int result);
+int _mosquitto_send_connack(struct mosquitto *context, int ack, int result);
 int _mosquitto_send_suback(struct mosquitto *context, uint16_t mid, uint32_t payloadlen, const void *payload);
 
 /* ============================================================
@@ -348,7 +376,6 @@ int mqtt3_db_close(struct mosquitto_db *db);
 int mqtt3_db_backup(struct mosquitto_db *db, bool cleanup, bool shutdown);
 int mqtt3_db_restore(struct mosquitto_db *db);
 #endif
-int mqtt3_db_client_count(struct mosquitto_db *db, unsigned int *count, unsigned int *inactive_count);
 void mqtt3_db_limits_set(int inflight, int queued);
 /* Return the number of in-flight messages in count. */
 int mqtt3_db_message_count(int *count);
@@ -382,7 +409,7 @@ int mqtt3_subs_clean_session(struct mosquitto_db *db, struct mosquitto *context,
 /* ============================================================
  * Context functions
  * ============================================================ */
-struct mosquitto *mqtt3_context_init(int sock);
+struct mosquitto *mqtt3_context_init(struct mosquitto_db *db, int sock);
 void mqtt3_context_cleanup(struct mosquitto_db *db, struct mosquitto *context, bool do_free);
 void mqtt3_context_disconnect(struct mosquitto_db *db, struct mosquitto *context);
 
@@ -430,5 +457,13 @@ void service_install(void);
 void service_uninstall(void);
 void service_run(void);
 #endif
+
+/* ============================================================
+ * Websockets related functions
+ * ============================================================ */
+#ifdef WITH_WEBSOCKETS
+struct libwebsocket_context *mosq_websockets_init(struct _mqtt3_listener *listener);
+#endif
+void do_disconnect(struct mosquitto_db *db, struct mosquitto *context);
 
 #endif

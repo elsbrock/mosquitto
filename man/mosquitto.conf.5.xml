@@ -651,6 +651,43 @@
 						<para>Not reloaded on reload signal.</para>
 					</listitem>
 				</varlistentry>
+				<varlistentry>
+					<term><option>protocol</option> <replaceable>value</replaceable></term>
+					<listitem>
+						<para>Set the protocol to accept for this listener. Can
+							be <option>mqtt</option>, the default, or
+							<option>websockets</option> if available.</para>
+						<para>Websockets support is currently disabled by
+							default at compile time, is extremely experimental
+							and may only work with unreleased versions of
+							libwebsockets. Certificate based TLS may be used
+							with websockets, except that only the
+							<option>cafile</option>, <option>certfile</option>,
+							<option>keyfile</option> and
+							<option>ciphers</option> options are
+							supported.</para>
+						<para>Not reloaded on reload signal.</para>
+					</listitem>
+				</varlistentry>
+				<varlistentry>
+					<term><option>use_username_as_clientid</option> [ true | false ]</term>
+					<listitem>
+						<para>Set <option>use_username_as_clientid</option> to
+							true to replace the clientid that a client
+							connected with with its username. This allows
+							authentication to be tied to the clientid, which
+							means that it is possible to prevent one client
+							disconnecting another by using the same
+							clientid. Defaults to false.</para>
+						<para>If a client connects with no username it will be
+							disconnected as not authorised when this option is
+							set to true. Do not use in conjunction with
+							<option>clientid_prefixes</option>.</para>
+						<para>See also
+							<option>use_identity_as_username</option>.</para>
+						<para>Not reloaded on reload signal.</para>
+					</listitem>
+				</varlistentry>
 			</variablelist>
 		</refsect2>
 		<refsect2>
@@ -740,8 +777,9 @@
 							used for this listener. Possible values are
 							<replaceable>tlsv1.2</replaceable>,
 							<replaceable>tlsv1.1</replaceable> and
-							<replaceable>tlsv1</replaceable>. Defaults to
-							<replaceable>tlsv1.2</replaceable>.</para>
+							<replaceable>tlsv1</replaceable>. If left unset,
+							the default of allowing all of TLS v1.2, v1.1 and
+							v1.0 is used.</para>
 					</listitem>
 				</varlistentry>
 				<varlistentry>
@@ -800,8 +838,9 @@
 							used for this listener. Possible values are
 							<replaceable>tlsv1.2</replaceable>,
 							<replaceable>tlsv1.1</replaceable> and
-							<replaceable>tlsv1</replaceable>. Defaults to
-							<replaceable>tlsv1.2</replaceable>.</para>
+							<replaceable>tlsv1</replaceable>. If left unset,
+							the default of allowing all of TLS v1.2, v1.1 and
+							v1.0 is used.</para>
 					</listitem>
 				</varlistentry>
 				<varlistentry>
@@ -898,6 +937,32 @@
 					<para>Set the amount of time a bridge using the lazy start
 						type must be idle before it will be stopped. Defaults
 						to 60 seconds.</para>
+				</listitem>
+			</varlistentry>
+			<varlistentry>
+				<term><option>local_clientid</option> <replaceable>password</replaceable></term>
+				<listitem>
+					<para>Set the clientid to use on the local broker. If not
+						defined, this defaults to
+						<option>local.&lt;clientid&gt;</option>. If you are
+						bridging a broker to itself, it is important that
+						local_clientid and clientid do not match.</para>
+				</listitem>
+			</varlistentry>
+			<varlistentry>
+				<term><option>local_password</option> <replaceable>password</replaceable></term>
+				<listitem>
+					<para>Configure the password to be used when connecting
+						this bridge to the local broker. This may be important
+						when authentication and ACLs are being used.</para>
+				</listitem>
+			</varlistentry>
+			<varlistentry>
+				<term><option>local_username</option> <replaceable>username</replaceable></term>
+				<listitem>
+					<para>Configure the username to be used when connecting
+						this bridge to the local broker. This may be important
+						when authentication and ACLs are being used.</para>
 				</listitem>
 			</varlistentry>
 			<varlistentry>

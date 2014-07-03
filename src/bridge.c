@@ -57,20 +57,15 @@ POSSIBILITY OF SUCH DAMAGE.
 
 int mqtt3_bridge_new(struct mosquitto_db *db, struct _mqtt3_bridge *bridge)
 {
-	int i;
 	struct mosquitto *new_context = NULL;
-	int null_index = -1;
-	struct mosquitto **tmp_contexts;
 	char hostname[256];
 	int len;
-	char *id;
+	char *id, *local_id;
 
 	assert(db);
 	assert(bridge);
 
-	if(bridge->clientid){
-		id = _mosquitto_strdup(bridge->clientid);
-	}else{
+	if(!bridge->clientid){
 		if(!gethostname(hostname, 256)){
 			len = strlen(hostname) + strlen(bridge->name) + 2;
 			id = _mosquitto_malloc(len);
@@ -81,48 +76,32 @@ int mqtt3_bridge_new(struct mosquitto_db *db, struct _mqtt3_bridge *bridge)
 		}else{
 			return 1;
 		}
+		bridge->clientid = id;
 	}
-	if(!id){
-		return MOSQ_ERR_NOMEM;
+	if(bridge->local_clientid){
+		local_id = _mosquitto_strdup(bridge->local_clientid);
+	}else{
+		len = strlen(bridge->clientid) + strlen("local.") + 2;
+		local_id = _mosquitto_malloc(len);
+		if(!local_id){
+			return MOSQ_ERR_NOMEM;
+		}
+		snprintf(local_id, len, "local.%s", bridge->clientid);
+		bridge->local_clientid = local_id;
 	}
 
-	/* Search for existing id (possible from persistent db) and also look for a
-	 * gap in the db->contexts[] array in case the id isn't found. */
-	for(i=0; i<db->context_count; i++){
-		if(db->contexts[i]){
-			if(!strcmp(db->contexts[i]->id, id)){
-				new_context = db->contexts[i];
-				break;
-			}
-		}else if(db->contexts[i] == NULL && null_index == -1){
-			null_index = i;
-			break;
-		}
-	}
-	if(!new_context){
+	HASH_FIND(hh_id, db->contexts_by_id, local_id, strlen(local_id), new_context);
+	if(new_context){
+		/* (possible from persistent db) */
+		_mosquitto_free(local_id);
+	}else{
 		/* id wasn't found, so generate a new context */
-		new_context = mqtt3_context_init(-1);
+		new_context = mqtt3_context_init(db, -1);
 		if(!new_context){
 			return MOSQ_ERR_NOMEM;
 		}
-		if(null_index == -1){
-			/* There were no gaps in the db->contexts[] array, so need to append. */
-			db->context_count++;
-			tmp_contexts = _mosquitto_realloc(db->contexts, sizeof(struct mosquitto*)*db->context_count);
-			if(tmp_contexts){
-				db->contexts = tmp_contexts;
-				db->contexts[db->context_count-1] = new_context;
-			}else{
-				_mosquitto_free(new_context);
-				return MOSQ_ERR_NOMEM;
-			}
-		}else{
-			db->contexts[null_index] = new_context;
-		}
-		new_context->id = id;
-	}else{
-		/* id was found, so context->id already in memory. */
-		_mosquitto_free(id);
+		new_context->id = local_id;
+		HASH_ADD_KEYPTR(hh_id, db->contexts_by_id, new_context->id, strlen(new_context->id), new_context);
 	}
 	new_context->bridge = bridge;
 	new_context->is_bridge = true;
@@ -135,6 +114,7 @@ int mqtt3_bridge_new(struct mosquitto_db *db, struct _mqtt3_bridge *bridge)
 	new_context->tls_capath = new_context->bridge->tls_capath;
 	new_context->tls_certfile = new_context->bridge->tls_certfile;
 	new_context->tls_keyfile = new_context->bridge->tls_keyfile;
+	new_context->tls_cert_reqs = SSL_VERIFY_PEER;
 	new_context->tls_version = new_context->bridge->tls_version;
 	new_context->tls_insecure = new_context->bridge->tls_insecure;
 #ifdef REAL_WITH_TLS_PSK
@@ -144,6 +124,8 @@ int mqtt3_bridge_new(struct mosquitto_db *db, struct _mqtt3_bridge *bridge)
 #endif
 
 	bridge->try_private_accepted = true;
+
+	HASH_ADD_KEYPTR(hh_bridge, db->contexts_bridge, new_context->bridge->local_clientid, strlen(new_context->bridge->local_clientid), new_context);
 
 	return mqtt3_bridge_connect(db, new_context);
 }
@@ -173,6 +155,13 @@ int mqtt3_bridge_connect(struct mosquitto_db *db, struct mosquitto *context)
 	if(context->clean_session){
 		mqtt3_db_messages_delete(context);
 	}
+
+	rc = mosquitto_unpwd_check(db, context->bridge->local_username, context->bridge->local_password);
+	if(rc == MOSQ_ERR_AUTH){
+		_mosquitto_log_printf(NULL, MOSQ_LOG_ERR, "Bridge %s failed authentication on local broker.", context->id);
+		return rc;
+	}
+	rc = 0;
 
 	/* Delete all local subscriptions even for clean_session==false. We don't
 	 * remove any messages and the next loop carries out the resubscription
@@ -225,6 +214,7 @@ int mqtt3_bridge_connect(struct mosquitto_db *db, struct mosquitto *context)
 		return rc;
 	}
 
+	HASH_ADD(hh_sock, db->contexts_by_sock, sock, sizeof(context->sock), context);
 	rc = _mosquitto_send_connect(context, context->keepalive, context->clean_session);
 	if(rc == MOSQ_ERR_SUCCESS){
 		return MOSQ_ERR_SUCCESS;
@@ -238,7 +228,7 @@ int mqtt3_bridge_connect(struct mosquitto_db *db, struct mosquitto *context)
 		}else if(rc == MOSQ_ERR_EAI){
 			_mosquitto_log_printf(NULL, MOSQ_LOG_ERR, "Error creating bridge: %s.", gai_strerror(errno));
 		}
-		_mosquitto_socket_close(context);
+		_mosquitto_socket_close(db, context);
 		return rc;
 	}
 }

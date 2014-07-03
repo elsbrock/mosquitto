@@ -67,6 +67,7 @@ POSSIBILITY OF SUCH DAMAGE.
 #include "mosquitto.h"
 #include "time_mosq.h"
 #ifdef WITH_BROKER
+#  include "uthash.h"
 struct mosquitto_client_msg;
 #endif
 
@@ -96,7 +97,8 @@ enum mosquitto_client_state {
 	mosq_cs_disconnecting = 2,
 	mosq_cs_connect_async = 3,
 	mosq_cs_connect_pending = 4,
-	mosq_cs_connect_srv = 5
+	mosq_cs_connect_srv = 5,
+	mosq_cs_disconnect_ws = 6
 };
 
 enum _mosquitto_protocol {
@@ -202,9 +204,12 @@ struct mosquitto {
 	struct _mqtt3_listener *listener;
 	time_t disconnect_t;
 	int pollfd_index;
-	int db_index;
 	struct _mosquitto_packet *out_packet_last;
 	bool is_dropping;
+#  ifdef WITH_WEBSOCKETS
+	struct libwebsocket_context *ws_context;
+	struct libwebsocket *wsi;
+#  endif
 #else
 	void *userdata;
 	bool in_callback;
@@ -236,6 +241,15 @@ struct mosquitto {
 	int max_inflight_messages;
 #  ifdef WITH_SRV
 	ares_channel achan;
+#  endif
+#endif
+
+#ifdef WITH_BROKER
+	UT_hash_handle hh_id;
+	UT_hash_handle hh_sock;
+	UT_hash_handle hh_for_free;
+#  ifdef WITH_BRIDGE
+	UT_hash_handle hh_bridge;
 #  endif
 #endif
 };

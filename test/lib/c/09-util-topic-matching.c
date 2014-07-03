@@ -16,9 +16,12 @@ void do_check(const char *sub, const char *topic, bool bad_res)
 
 int main(int argc, char *argv[])
 {
+	do_check("test/6/#", "test/3", true);
 	do_check("foo/bar", "foo/bar", false);
 	do_check("foo/+", "foo/bar", false);
 	do_check("foo/+/baz", "foo/bar/baz", false);
+
+	do_check("A/B/+/#", "A/B/B/C", false);
 
 	do_check("foo/+/#", "foo/bar/baz", false);
 	do_check("#", "foo/bar/baz", false);
@@ -42,6 +45,8 @@ int main(int argc, char *argv[])
 	do_check("$SYS/bar", "$SYS/bar", false);
 	do_check("#", "$SYS/bar", true);
 	do_check("$BOB/bar", "$SYS/bar", true);
+
+	do_check("/foo/#", "foo/bar", true);
 
 	return 0;
 }

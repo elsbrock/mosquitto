@@ -1,3 +1,72 @@
+1.4 - xxxxxxxx
+==============
+
+Important changes:
+- Bridge behaviour on the local broker has changed due to the introduction of
+  the local_* options. This may affect you if you are using authentication
+  and/or ACLs with bridges.
+- The default TLS behaviour has changed to accept all of TLS v1.2, v1.1 and
+  v1.0, rather than only only one version of the protocol. It is still
+  possible to restrict a listener to a single version of TLS.
+- The Python client has been removed now that the Eclipse Paho Python client
+  has had a release.
+- When a durable client reconnects, its queued messages are now checked
+  against ACLs in case of a change in username/ACL state since it last
+  connected.
+- New use_username_as_clientid option on the broker, for preventing hijacking
+  of a client id.
+
+
+Broker:
+- Add local_clientid, local_username, local_password for bridge connections to
+  authenticate to the local broker.
+- Default TLS mode now accepts TLS v1.2, v1.1 and v1.0.
+- Ensure that bridges verify certificates by default when using TLS.
+- Fix possible crash when using pattern ACLs that do not include a %u and
+  clients that connect without a username.
+- Fix subscriptions being deleted when clients subscribed to a topic beginning
+  with a $ but that is not $SYS.
+- Experimental websockets support. Disabled by default at runtime. Requires
+  unreleased libwebsockets.
+- Fix bug #1324411, which could have had unexpected consequences for delayed
+  messages in rare circumstances.
+- Add support for "session present" in CONNACK messages for MQTT v3.1.1.
+- Remove strict protocol #ifdefs.
+- Change $SYS/broker/clients/active -> $SYS/broker/clients/connected
+- Change $SYS/broker/clients/inactive -> $SYS/broker/clients/disconnected
+- Support for ECDHE-ECDSA family ciphers.
+- When a durable client reconnects, its queued messages are now checked
+  against ACLs in case of a change in username/ACL state since it last
+  connected.
+- libuuid is used to generate client ids, where it is available, when an MQTT
+  v3.1.1 client connects with a zero length client id.
+- Anonymous clients are no longer accidently disconnected from the broker
+  after a SIGHUP.
+- mosquitto_passwd now supports -b (batch mode) to allow the password to be
+  provided at the command line.
+- Removed $SYS/broker/changeset. This was intended for use with debugging, but
+  in practice is of no use.
+- Add support for use_username_as_clientid which can be used with
+  authentication to restrict ownership of client ids and hence prevent one
+  client disconnecting another by using the same client id.
+
+Clients:
+- Both clients can now load default configuration options from a file.
+- Add -1 (oneshot) option to mosquitto_sub.
+
+Client library:
+- Fix topic matching edge case.
+- Fix callback deadlocks after calling mosquitto_disconnect(), when using the
+  threaded interfaces. Closes bug #1313725.
+- Fix SRV support when building with CMake.
+- Remove Python library (use Paho Python client instead).
+- Remove strict protocol #ifdefs.
+
+General:
+- Use $(STRIP) for stripping binaries when installing, to allow easier cross
+  compilation.
+- Support cross compilation more easily.
+
 1.3.1 - 20140324
 ================
 
@@ -15,6 +84,7 @@ Client library:
 - Fix compilation for WITH_THREADING=no.
 - Break out of select() when calling mosquitto_loop_stop().
 - Reject invalid un/subscriptions e.g. foo/+bar #/bar.
+- Add mosquitto_threaded_set().
 
 Clients:
 - Fix keepalive value on mosquitto_pub.

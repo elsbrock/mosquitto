@@ -64,6 +64,8 @@ POSSIBILITY OF SUCH DAMAGE.
 #endif
 
 #ifdef WITH_TLS
+#include <openssl/conf.h>
+#include <openssl/engine.h>
 #include <openssl/err.h>
 #include <tls_mosq.h>
 #endif
@@ -77,6 +79,9 @@ POSSIBILITY OF SUCH DAMAGE.
    extern unsigned long g_msgs_sent;
    extern unsigned long g_pub_msgs_received;
    extern unsigned long g_pub_msgs_sent;
+#  endif
+#  ifdef WITH_WEBSOCKETS
+#    include <libwebsockets.h>
 #  endif
 #else
 #  include <read_handle.h>
@@ -117,6 +122,10 @@ void _mosquitto_net_init(void)
 void _mosquitto_net_cleanup(void)
 {
 #ifdef WITH_TLS
+	sk_SSL_COMP_free(SSL_COMP_get_compression_methods());
+	ERR_remove_state(0);
+	ENGINE_cleanup();
+	CONF_modules_unload(1);
 	ERR_free_strings();
 	EVP_cleanup();
 	CRYPTO_cleanup_all_ex_data();
@@ -168,7 +177,16 @@ int _mosquitto_packet_queue(struct mosquitto *mosq, struct _mosquitto_packet *pa
 	mosq->out_packet_last = packet;
 	pthread_mutex_unlock(&mosq->out_packet_mutex);
 #ifdef WITH_BROKER
+#  ifdef WITH_WEBSOCKETS
+	if(mosq->wsi){
+		libwebsocket_callback_on_writable(mosq->ws_context, mosq->wsi);
+		return 0;
+	}else{
+		return _mosquitto_packet_write(mosq);
+	}
+#  else
 	return _mosquitto_packet_write(mosq);
+#  endif
 #else
 
 	/* Write a single byte to sockpairW (connected to sockpairR) to break out
@@ -194,7 +212,11 @@ int _mosquitto_packet_queue(struct mosquitto *mosq, struct _mosquitto_packet *pa
  * Returns 1 on failure (context is NULL)
  * Returns 0 on success.
  */
+#ifdef WITH_BROKER
+int _mosquitto_socket_close(struct mosquitto_db *db, struct mosquitto *mosq)
+#else
 int _mosquitto_socket_close(struct mosquitto *mosq)
+#endif
 {
 	int rc = 0;
 
@@ -211,10 +233,31 @@ int _mosquitto_socket_close(struct mosquitto *mosq)
 	}
 #endif
 
-	if(mosq->sock != INVALID_SOCKET){
+	if(mosq->sock >= 0){
+#ifdef WITH_BROKER
+		HASH_DELETE(hh_sock, db->contexts_by_sock, mosq);
+#endif
 		rc = COMPAT_CLOSE(mosq->sock);
 		mosq->sock = INVALID_SOCKET;
+#ifdef WITH_WEBSOCKETS
+	}else if(mosq->sock == WEBSOCKET_CLIENT){
+		if(mosq->state != mosq_cs_disconnecting){
+			mosq->state = mosq_cs_disconnect_ws;
+		}
+		if(mosq->wsi){
+			libwebsocket_callback_on_writable(mosq->ws_context, mosq->wsi);
+		}
+		mosq->sock = INVALID_SOCKET;
+#endif
 	}
+
+#ifdef WITH_BROKER
+	if(mosq->listener){
+		mosq->listener->client_count--;
+		assert(mosq->listener->client_count >= 0);
+		mosq->listener = NULL;
+	}
+#endif
 
 	return rc;
 }
@@ -279,6 +322,7 @@ int _mosquitto_try_connect(const char *host, uint16_t port, int *sock, const cha
 		}else if(rp->ai_family == PF_INET6){
 			((struct sockaddr_in6 *)rp->ai_addr)->sin6_port = htons(port);
 		}else{
+			COMPAT_CLOSE(*sock);
 			continue;
 		}
 
@@ -789,6 +833,7 @@ int _mosquitto_packet_write(struct mosquitto *mosq)
 				mosq->on_disconnect(mosq, mosq->userdata, 0);
 				mosq->in_callback = false;
 			}
+			pthread_mutex_unlock(&mosq->callback_mutex);
 			pthread_mutex_unlock(&mosq->current_out_packet_mutex);
 			return MOSQ_ERR_SUCCESS;
 		}
