@@ -3,3 +3,6 @@ fix-prefix.patch
 nostrip.patch
 pynomake.patch
 disable-in-tree-uthash.patch
+disable-cipher-list.patch
+fix-pubclient-linking.patch
+add-custom-version.patch

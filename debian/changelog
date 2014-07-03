@@ -1,3 +1,10 @@
+mosquitto (1.4-0websockets.1) unstable; urgency=medium
+
+  * Non-maintainer upload.
+  * use upstream 1.4 branch
+
+ -- Simon Elsbrock <simon@iodev.org>  Fri, 04 Jul 2014 00:28:40 +0200
+
 mosquitto (1.3.1-0mosquitto1) unstable; urgency=low
 
   * New upstream release: http://mosquitto.org/2014/03/version-1-3-1-released/

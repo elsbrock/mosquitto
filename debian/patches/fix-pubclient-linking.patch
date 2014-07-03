@@ -1,0 +1,41 @@
+Description: <short description, required>
+ <long description that can span multiple lines, optional>
+Author: <name and email of author, optional>
+Origin: <upstream|backport|vendor|other>, <URL, required except if Author is present>
+Bug: <URL to the upstream bug report if any, implies patch has been forwarded, optional>
+Bug-<Vendor>: <URL to the vendor bug report if any, optional>
+Forwarded: <URL|no|not-needed, useless if you have a Bug field, optional>
+Applied-Upstream: <version|URL|commit, identifies patches merged upstream, optional>
+Reviewed-by: <name and email of a reviewer, optional>
+Last-Update: <YYYY-MM-DD, last update of the meta-information, optional>
+---
+This patch header follows DEP-3: http://dep.debian.net/deps/dep3/
+--- a/client/Makefile
++++ b/client/Makefile
+@@ -2,13 +2,13 @@
+ 
+ .PHONY: all install uninstall reallyclean clean
+ 
+-all : mosquitto_pub mosquitto_sub
++all : client_shared.o mosquitto_pub mosquitto_sub
+ 
+ mosquitto_pub : pub_client.o ../lib/libmosquitto.so.${SOVERSION}
+-	${CC} $< -o $@ ${CLIENT_LDFLAGS}
++	${CC} client_shared.o $< -o $@ ${CLIENT_LDFLAGS}
+ 
+ mosquitto_sub : sub_client.o ../lib/libmosquitto.so.${SOVERSION}
+-	${CC} $< -o $@ ${CLIENT_LDFLAGS}
++	${CC} client_shared.o $< -o $@ ${CLIENT_LDFLAGS}
+ 
+ pub_client.o : pub_client.c ../lib/libmosquitto.so.${SOVERSION}
+ 	${CC} -c $< -o $@ ${CLIENT_CFLAGS}
+@@ -16,6 +16,9 @@
+ sub_client.o : sub_client.c ../lib/libmosquitto.so.${SOVERSION}
+ 	${CC} -c $< -o $@ ${CLIENT_CFLAGS}
+ 
++client_shared.o : client_shared.c ../lib/libmosquitto.so.${SOVERSION}
++	${CC} -c $< -o $@ ${CLIENT_CFLAGS}
++
+ ../lib/libmosquitto.so.${SOVERSION} :
+ 	$(MAKE) -C ../lib
+ 
