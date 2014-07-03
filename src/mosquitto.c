@@ -44,12 +44,19 @@ POSSIBILITY OF SUCH DAMAGE.
 #include <ws2tcpip.h>
 #endif
 
+#ifndef WIN32
+#  include <sys/time.h>
+#endif
+
 #include <errno.h>
 #include <signal.h>
 #include <stdio.h>
 #include <string.h>
 #ifdef WITH_WRAP
 #include <tcpd.h>
+#endif
+#ifdef WITH_WEBSOCKETS
+#  include <libwebsockets.h>
 #endif
 
 #include <mosquitto_broker.h>
@@ -170,6 +177,10 @@ int main(int argc, char *argv[])
 #else
 	struct timeval tv;
 #endif
+	struct mosquitto *ctxt, *ctxt_tmp;
+#ifdef WITH_WEBSOCKETS
+	struct libws_mqtt_hack *hack_head, *hack;
+#endif
 
 #if defined(WIN32) || defined(__CYGWIN__)
 	if(argc == 2){
@@ -262,48 +273,47 @@ int main(int argc, char *argv[])
 		mqtt3_db_messages_easy_queue(&int_db, NULL, "$SYS/broker/version", 2, strlen(buf), buf, 1);
 		snprintf(buf, 1024, "%s", TIMESTAMP);
 		mqtt3_db_messages_easy_queue(&int_db, NULL, "$SYS/broker/timestamp", 2, strlen(buf), buf, 1);
-#ifdef CHANGESET
-		snprintf(buf, 1024, "%s", CHANGESET);
-		mqtt3_db_messages_easy_queue(&int_db, NULL, "$SYS/broker/changeset", 2, strlen(buf), buf, 1);
-#endif
 	}
 #endif
 
 	listener_max = -1;
 	listensock_index = 0;
 	for(i=0; i<config.listener_count; i++){
-		if(mqtt3_socket_listen(&config.listeners[i])){
-			_mosquitto_free(int_db.contexts);
-			mqtt3_db_close(&int_db);
-			if(config.pid_file){
-				remove(config.pid_file);
-			}
-			return 1;
-		}
-		listensock_count += config.listeners[i].sock_count;
-		listensock = _mosquitto_realloc(listensock, sizeof(int)*listensock_count);
-		if(!listensock){
-			_mosquitto_free(int_db.contexts);
-			mqtt3_db_close(&int_db);
-			if(config.pid_file){
-				remove(config.pid_file);
-			}
-			return 1;
-		}
-		for(j=0; j<config.listeners[i].sock_count; j++){
-			if(config.listeners[i].socks[j] == INVALID_SOCKET){
-				_mosquitto_free(int_db.contexts);
+		if(config.listeners[i].protocol == mp_mqtt){
+			if(mqtt3_socket_listen(&config.listeners[i])){
 				mqtt3_db_close(&int_db);
 				if(config.pid_file){
 					remove(config.pid_file);
 				}
 				return 1;
 			}
-			listensock[listensock_index] = config.listeners[i].socks[j];
-			if(listensock[listensock_index] > listener_max){
-				listener_max = listensock[listensock_index];
+			listensock_count += config.listeners[i].sock_count;
+			listensock = _mosquitto_realloc(listensock, sizeof(int)*listensock_count);
+			if(!listensock){
+				mqtt3_db_close(&int_db);
+				if(config.pid_file){
+					remove(config.pid_file);
+				}
+				return 1;
 			}
-			listensock_index++;
+			for(j=0; j<config.listeners[i].sock_count; j++){
+				if(config.listeners[i].socks[j] == INVALID_SOCKET){
+					mqtt3_db_close(&int_db);
+					if(config.pid_file){
+						remove(config.pid_file);
+					}
+					return 1;
+				}
+				listensock[listensock_index] = config.listeners[i].socks[j];
+				if(listensock[listensock_index] > listener_max){
+					listener_max = listensock[listensock_index];
+				}
+				listensock_index++;
+			}
+		}else if(config.listeners[i].protocol == mp_websockets){
+#ifdef WITH_WEBSOCKETS
+			config.listeners[i].ws_context = mosq_websockets_init(&config.listeners[i]);
+#endif
 		}
 	}
 
@@ -339,13 +349,43 @@ int main(int argc, char *argv[])
 	}
 #endif
 
-	for(i=0; i<int_db.context_count; i++){
-		if(int_db.contexts[i]){
-			mqtt3_context_cleanup(&int_db, int_db.contexts[i], true);
+	HASH_ITER(hh_id, int_db.contexts_by_id, ctxt, ctxt_tmp){
+#ifdef WITH_WEBSOCKETS
+		if(!ctxt->wsi){
+			mqtt3_context_cleanup(&int_db, ctxt, true);
+		}
+#else
+		mqtt3_context_cleanup(&int_db, ctxt, true);
+#endif
+	}
+	HASH_ITER(hh_sock, int_db.contexts_by_sock, ctxt, ctxt_tmp){
+		mqtt3_context_cleanup(&int_db, ctxt, true);
+	}
+#ifdef WITH_BRIDGE
+	HASH_ITER(hh_bridge, int_db.contexts_bridge, ctxt, ctxt_tmp){
+		mqtt3_context_cleanup(&int_db, ctxt, true);
+	}
+#endif
+	HASH_ITER(hh_for_free, int_db.contexts_for_free, ctxt, ctxt_tmp){
+		HASH_DELETE(hh_for_free, int_db.contexts_for_free, ctxt);
+		mqtt3_context_cleanup(&int_db, ctxt, true);
+	}
+#ifdef WITH_WEBSOCKETS
+	for(i=0; i<int_db.config->listener_count; i++){
+		if(int_db.config->listeners[i].ws_context){
+			hack_head = libwebsocket_context_user(int_db.config->listeners[i].ws_context);
+			libwebsocket_context_destroy(int_db.config->listeners[i].ws_context);
+			if(hack_head){
+				while(hack_head){
+					hack = hack_head->next;
+					_mosquitto_free(hack_head);
+					hack_head = hack;
+				}
+			}
 		}
 	}
-	_mosquitto_free(int_db.contexts);
-	int_db.contexts = NULL;
+#endif
+
 	mqtt3_db_close(&int_db);
 
 	if(listensock){
@@ -367,8 +407,8 @@ int main(int argc, char *argv[])
 		remove(config.pid_file);
 	}
 
-	_mosquitto_net_cleanup();
 	mqtt3_config_cleanup(int_db.config);
+	_mosquitto_net_cleanup();
 
 	return rc;
 }

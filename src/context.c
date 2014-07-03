@@ -37,7 +37,7 @@ POSSIBILITY OF SUCH DAMAGE.
 
 #include "uthash.h"
 
-struct mosquitto *mqtt3_context_init(int sock)
+struct mosquitto *mqtt3_context_init(struct mosquitto_db *db, int sock)
 {
 	struct mosquitto *context;
 	char address[1024];
@@ -70,7 +70,7 @@ struct mosquitto *mqtt3_context_init(int sock)
 	context->current_out_packet = NULL;
 
 	context->address = NULL;
-	if(sock != -1){
+	if(sock >= 0){
 		if(!_mosquitto_socket_get_address(sock, address, 1024)){
 			context->address = _mosquitto_strdup(address);
 		}
@@ -89,6 +89,9 @@ struct mosquitto *mqtt3_context_init(int sock)
 	context->ssl = NULL;
 #endif
 
+	if(context->sock >= 0){
+		HASH_ADD(hh_sock, db->contexts_by_sock, sock, sizeof(context->sock), context);
+	}
 	return context;
 }
 
@@ -102,7 +105,7 @@ void mqtt3_context_cleanup(struct mosquitto_db *db, struct mosquitto *context, b
 {
 	struct _mosquitto_packet *packet;
 	struct mosquitto_client_msg *msg, *next;
-	struct _clientid_index_hash *find_cih;
+	struct mosquitto *ctx_tmp;
 
 	if(!context) return;
 
@@ -116,28 +119,32 @@ void mqtt3_context_cleanup(struct mosquitto_db *db, struct mosquitto *context, b
 	}
 #ifdef WITH_BRIDGE
 	if(context->bridge){
+		if(context->bridge->local_clientid){
+			HASH_FIND(hh_bridge, db->contexts_bridge, context->bridge->local_clientid, strlen(context->bridge->local_clientid), ctx_tmp);
+			if(ctx_tmp){
+				HASH_DELETE(hh_bridge, db->contexts_bridge, context);
+			}
+			_mosquitto_free(context->bridge->local_clientid);
+			context->bridge->local_clientid = NULL;
+		}
 		if(context->bridge->username){
 			context->bridge->username = NULL;
 		}
 		if(context->bridge->password){
 			context->bridge->password = NULL;
 		}
-	}
-#endif
-#ifdef WITH_TLS
-	if(context->ssl){
-		SSL_free(context->ssl);
-		context->ssl = NULL;
-	}
-#endif
-	if(context->sock != -1){
-		if(context->listener){
-			context->listener->client_count--;
-			assert(context->listener->client_count >= 0);
+		if(context->bridge->local_username){
+			context->bridge->local_username = NULL;
 		}
-		_mosquitto_socket_close(context);
-		context->listener = NULL;
+		if(context->bridge->local_password){
+			context->bridge->local_password = NULL;
+		}
+		if(context->bridge->local_clientid){
+			context->bridge->local_clientid = NULL;
+		}
 	}
+#endif
+	_mosquitto_socket_close(db, context);
 	if(context->clean_session && db){
 		mqtt3_subs_clean_session(db, context, &db->subs);
 		mqtt3_db_messages_delete(context);
@@ -146,19 +153,17 @@ void mqtt3_context_cleanup(struct mosquitto_db *db, struct mosquitto *context, b
 		_mosquitto_free(context->address);
 		context->address = NULL;
 	}
+
+	HASH_FIND(hh_for_free, db->contexts_for_free, context, sizeof(void *), ctx_tmp);
+	if(ctx_tmp){
+		HASH_DELETE(hh_for_free, db->contexts_for_free, context);
+	}
+
 	if(context->id){
 		assert(db); /* db can only be NULL here if the client hasn't sent a
 					   CONNECT and hence wouldn't have an id. */
 
-		// Remove the context's ID from the DB hash
-		HASH_FIND_STR(db->clientid_index_hash, context->id, find_cih);
-		if(find_cih){
-			// FIXME - internal level debug? _mosquitto_log_printf(NULL, MOSQ_LOG_INFO, "Found id for client \"%s\", their index was %d.", context->id, find_cih->db_context_index);
-			HASH_DEL(db->clientid_index_hash, find_cih);
-			_mosquitto_free(find_cih);
-		}else{
-			// FIXME - internal level debug? _mosquitto_log_printf(NULL, MOSQ_LOG_WARNING, "Unable to find id for client \"%s\".", context->id);
-		}
+		HASH_DELETE(hh_id, db->contexts_by_id, context);
 		_mosquitto_free(context->id);
 		context->id = NULL;
 	}
@@ -205,12 +210,13 @@ void mqtt3_context_disconnect(struct mosquitto_db *db, struct mosquitto *ctxt)
 		_mosquitto_free(ctxt->will);
 		ctxt->will = NULL;
 	}
-	if(ctxt->listener){
-		ctxt->listener->client_count--;
-		assert(ctxt->listener->client_count >= 0);
-		ctxt->listener = NULL;
+	ctxt->disconnect_t = time(NULL);
+#ifdef WITH_SYS_TREE
+	db->connected_count--;
+	if(!ctxt->clean_session){
+		db->disconnected_count++;
 	}
-	ctxt->disconnect_t = mosquitto_time();
-	_mosquitto_socket_close(ctxt);
+#endif
+	_mosquitto_socket_close(db, ctxt);
 }
 

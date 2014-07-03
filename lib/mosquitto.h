@@ -64,8 +64,8 @@ extern "C" {
 #endif
 
 #define LIBMOSQUITTO_MAJOR 1
-#define LIBMOSQUITTO_MINOR 3
-#define LIBMOSQUITTO_REVISION 1
+#define LIBMOSQUITTO_MINOR 4
+#define LIBMOSQUITTO_REVISION 0
 /* LIBMOSQUITTO_VERSION_NUMBER looks like 1002001 for e.g. version 1.2.1. */
 #define LIBMOSQUITTO_VERSION_NUMBER (LIBMOSQUITTO_MAJOR*1000000+LIBMOSQUITTO_MINOR*1000+LIBMOSQUITTO_REVISION)
 
@@ -914,6 +914,23 @@ libmosq_EXPORT int mosquitto_loop_misc(struct mosquitto *mosq);
  *	<mosquitto_socket>, <mosquitto_loop_read>, <mosquitto_loop_write>
  */
 libmosq_EXPORT bool mosquitto_want_write(struct mosquitto *mosq);
+
+/*
+ * Function: mosquitto_threaded_set
+ *
+ * Used to tell the library that your application is using threads, but not
+ * using <mosquitto_loop_start>. The library operates slightly differently when
+ * not in threaded mode in order to simplify its operation. If you are managing
+ * your own threads and do not use this function you will experience crashes
+ * due to race conditions.
+ *
+ * When using <mosquitto_loop_start>, this is set automatically.
+ *
+ * Parameters:
+ *  mosq -     a valid mosquitto instance.
+ *  threaded - true if your application is using threads, false otherwise.
+ */
+libmosq_EXPORT int mosquitto_threaded_set(struct mosquitto *mosq, bool threaded);
 
 /*
  * Function: mosquitto_tls_set

@@ -1,5 +1,5 @@
 /*
-Copyright (c) 2009-2013 Roger Light <roger@atchoo.org>
+Copyright (c) 2009-2014 Roger Light <roger@atchoo.org>
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -52,10 +52,11 @@ int mqtt3_db_open(struct mqtt3_config *config, struct mosquitto_db *db)
 
 	db->last_db_id = 0;
 
-	db->context_count = 1;
-	db->contexts = _mosquitto_malloc(sizeof(struct mosquitto*)*db->context_count);
-	if(!db->contexts) return MOSQ_ERR_NOMEM;
-	db->contexts[0] = NULL;
+	db->contexts_by_id = NULL;
+	db->contexts_by_sock = NULL;
+	db->contexts_for_free = NULL;
+	db->contexts_bridge = NULL;
+
 	// Initialize the hashtable
 	db->clientid_index_hash = NULL;
 
@@ -134,31 +135,6 @@ int mqtt3_db_close(struct mosquitto_db *db)
 {
 	subhier_clean(db->subs.children);
 	mqtt3_db_store_clean(db);
-
-	return MOSQ_ERR_SUCCESS;
-}
-
-/* Returns the number of client currently in the database.
- * This includes inactive clients.
- * Returns 1 on failure (count is NULL)
- * Returns 0 on success.
- */
-int mqtt3_db_client_count(struct mosquitto_db *db, unsigned int *count, unsigned int *inactive_count)
-{
-	int i;
-
-	if(!db || !count || !inactive_count) return MOSQ_ERR_INVAL;
-
-	*count = 0;
-	*inactive_count = 0;
-	for(i=0; i<db->context_count; i++){
-		if(db->contexts[i]){
-			(*count)++;
-			if(db->contexts[i]->sock == INVALID_SOCKET){
-				(*inactive_count)++;
-			}
-		}
-	}
 
 	return MOSQ_ERR_SUCCESS;
 }
@@ -396,7 +372,15 @@ int mqtt3_db_message_insert(struct mosquitto_db *db, struct mosquitto *context, 
 	}
 #endif
 
+#ifdef WITH_WEBSOCKETS
+	if(context->wsi){
+		return mqtt3_db_message_write(context);
+	}else{
+		return rc;
+	}
+#else
 	return rc;
+#endif
 }
 
 int mqtt3_db_message_update(struct mosquitto *context, uint16_t mid, enum mosquitto_msg_direction dir, enum mosquitto_msg_state state)
@@ -632,20 +616,17 @@ int mqtt3_db_message_reconnect_reset(struct mosquitto *context)
 
 int mqtt3_db_message_timeout_check(struct mosquitto_db *db, unsigned int timeout)
 {
-	int i;
 	time_t threshold;
-	enum mosquitto_msg_state new_state = mosq_ms_invalid;
-	struct mosquitto *context;
+	enum mosquitto_msg_state new_state;
+	struct mosquitto *context, *ctxt_tmp;
 	struct mosquitto_client_msg *msg;
 
 	threshold = mosquitto_time() - timeout;
 	
-	for(i=0; i<db->context_count; i++){
-		context = db->contexts[i];
-		if(!context) continue;
-
+	HASH_ITER(hh_sock, db->contexts_by_sock, context, ctxt_tmp){
 		msg = context->msgs;
 		while(msg){
+			new_state = mosq_ms_invalid;
 			if(msg->timestamp < threshold && msg->state != mosq_ms_queued){
 				switch(msg->state){
 					case mosq_ms_wait_for_puback:
@@ -756,7 +737,7 @@ int mqtt3_db_message_write(struct mosquitto *context)
 	const void *payload;
 	int msg_count = 0;
 
-	if(!context || context->sock == -1
+	if(!context || context->sock == INVALID_SOCKET
 			|| (context->state == mosq_cs_connected && !context->id)){
 		return MOSQ_ERR_INVAL;
 	}

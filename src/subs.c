@@ -168,8 +168,13 @@ static int _sub_topic_tokenise(const char *subtopic, struct _sub_token **topics)
 		new_topic->topic = _mosquitto_strdup("");
 		if(!new_topic->topic) goto cleanup;
 
-		*topics = new_topic;
-		tail = new_topic;
+		if(tail){
+			tail->next = new_topic;
+			tail = tail->next;
+		}else{
+			*topics = new_topic;
+			tail = new_topic;
+		}
 	}
 
 	len = strlen(subtopic);
@@ -181,8 +186,13 @@ static int _sub_topic_tokenise(const char *subtopic, struct _sub_token **topics)
 		new_topic->topic = _mosquitto_strdup("");
 		if(!new_topic->topic) goto cleanup;
 
-		*topics = new_topic;
-		tail = new_topic;
+		if(tail){
+			tail->next = new_topic;
+			tail = tail->next;
+		}else{
+			*topics = new_topic;
+			tail = new_topic;
+		}
 
 		start = 1;
 	}else{
@@ -247,7 +257,13 @@ static int _sub_add(struct mosquitto_db *db, struct mosquitto *context, int qos,
 					 * need to update QoS. Return -1 to indicate this to the
 					 * calling function. */
 					leaf->qos = qos;
-					return -1;
+					if(context->protocol == mosq_p_mqtt31){
+						return -1;
+					}else{
+						/* mqttv311 requires retained messages are resent on
+						 * resubscribe. */
+						return 0;
+					}
 				}
 				last_leaf = leaf;
 				leaf = leaf->next;
@@ -397,7 +413,6 @@ int mqtt3_sub_add(struct mosquitto_db *db, struct mosquitto *context, const char
 			_mosquitto_log_printf(NULL, MOSQ_LOG_ERR, "Error: Out of memory.");
 			return MOSQ_ERR_NOMEM;
 		}
-		child->next = NULL;
 		child->topic = _mosquitto_strdup(tokens->topic);
 		if(!child->topic){
 			_mosquitto_log_printf(NULL, MOSQ_LOG_ERR, "Error: Out of memory.");
@@ -406,6 +421,11 @@ int mqtt3_sub_add(struct mosquitto_db *db, struct mosquitto *context, const char
 		child->subs = NULL;
 		child->children = NULL;
 		child->retained = NULL;
+		if(db->subs.children){
+			child->next = db->subs.children;
+		}else{
+			child->next = NULL;
+		}
 		db->subs.children = child;
 
 		rc = _sub_add(db, context, qos, child, tokens);
